@@ -9,6 +9,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
+#include <syslog.h>
 
 #include "cpu8086.h"
 
@@ -53,15 +54,17 @@ void op_popw(uint16_t *w1);
 void op_rolwb(uint16_t *w1, uint8_t *b2);
 void op_andbb(uint8_t *b1, uint8_t *b2);
 void op_daa(void);
-void op_adcbb(uint8_t *b1, uint8_t *b2);
 void op_decw(uint16_t *w1);
-void opvar_jump(uint8_t *b1, char *variant);
+//void opvar_jump(uint8_t *b1, char *variant);
+DEFINE_VARIANT_FCN(opvar_jump, uint8_t *b1);
 void op_jz(uint8_t *b1);
 void op_jnz(uint8_t *b1);
 void op_loop(uint8_t *b1);
 void op_int(uint8_t *b1);
 void op_call(uint16_t *w1);
 void op_ret(void);
+DEFINE_VARIANT_FCN(opvar_logicbb, uint8_t *b1, uint8_t *b2);
+void op_adcbb(uint8_t *b1, uint8_t *b2);
 void op_xorbb(uint8_t *b1, uint8_t *b2);
 void op_orbb(uint8_t *b1, uint8_t *b2);
 
@@ -76,6 +79,7 @@ void print_stack(void);
 void print_registry(void);
 void print_info(void);
 
+void clean_up_and_exit(int status);
 
 /* Memory of 512Kb */
 #define MEMORY_SIZE 0x80000
@@ -95,11 +99,11 @@ void* decode_modrm_16(uint8_t value)
             switch(n.rm) {
                 case 0x00: r = (void*)&AX; break;
                 default:
-                    printf("Invalid R/M in ModR/M byte!\n");
+                    syslog(LOG_DEBUG,"Invalid R/M in ModR/M byte!\n");
             }
             break;
         default:
-            printf("Invalid mode in ModR/M byte!\n");
+            syslog(LOG_DEBUG,"Invalid mode in ModR/M byte!\n");
     }    
     // switch(value) {
     //     case 0xC0: 
@@ -117,7 +121,7 @@ void* decode_modrm_r8(uint8_t value)
         case 0x00: r = (void*)&AL; break;
         case 0x07: r = (void*)&BH; break;
         default:
-            printf("Invalid registry (8) referenced in ModR/M byte!\n");
+            syslog(LOG_DEBUG,"Invalid registry (8) referenced in ModR/M byte!\n");
     }
     return r;
 }
@@ -128,7 +132,7 @@ void* decode_modrm_r16(uint8_t value)
     switch(value) {
         case 0x00: r = (void*)&AX; break;
         default:
-            printf("Invalid registry (16) referenced in ModR/M byte!\n");
+            syslog(LOG_DEBUG,"Invalid registry (16) referenced in ModR/M byte!\n");
     }
     return r;
 }
@@ -140,7 +144,7 @@ void* decode_modrm_seg(uint8_t value)
         case 0x01: r = (void*)&CS; break;
         case 0x03: r = (void*)&DS; break;
         default:
-            printf("Invalid segment referenced in ModR/M byte!\n");
+            syslog(LOG_DEBUG,"Invalid segment referenced in ModR/M byte!\n");
     }
     return r;
 }
@@ -170,10 +174,10 @@ void *get_modrm_address(enum ArgType argument, ModRM value)
                 r = decode_modrm_seg(value.reg);
                 break;
             default:
-                printf("Argument must be of ModR/M subset!\n");
+                syslog(LOG_DEBUG,"Argument must be of ModR/M subset!\n");
         }
     } else {
-        printf("Invalid mode in ModR/M byte!\n");
+        syslog(LOG_DEBUG,"Invalid mode in ModR/M byte!\n");
     }
     return r;
 }
@@ -183,7 +187,7 @@ uint8_t next_byte()
     uint8_t r;
     IP += 1;
     r = memory[INSTRUCTION_ADDRESS];
-    printf("Next byte = 0x%02X at 0x%04X\n", r, INSTRUCTION_ADDRESS);
+    syslog(LOG_DEBUG,"Next byte = 0x%02X at 0x%04X\n", r, INSTRUCTION_ADDRESS);
     return r;           
 }
 
@@ -204,24 +208,24 @@ void* get_argument_address(enum ArgType argument)
         case ARG_DI: return (void*)&DI;
         case ARG_MEMORY_8:
             r = (void *)&memory[INSTRUCTION_ADDRESS+1];
-            printf("Memory (8): %p %p %lX 0x%02X\n", memory, r, (uint8_t*) r - memory, *((uint8_t*) r));
+            syslog(LOG_DEBUG,"Memory (8): %p %p %lX 0x%02X\n", memory, r, (uint8_t*) r - memory, *((uint8_t*) r));
             IP += 1;
             break;
         case ARG_MEMORY_16:
             offset = (uint16_t*)&memory[INSTRUCTION_ADDRESS+1]; 
             // r =  (void *)((uint16_t*)memory + 16*ES + *offset);
             r = (void *)offset;
-            printf("Memory (16): %p %p %lX %04X %04X 0x%04X\n", memory, r, (uint8_t*) r - memory, *offset, *((uint16_t*) r), (16*ES));
+            syslog(LOG_DEBUG,"Memory (16): %p %p %lX 0x%04X 0x%04X\n", memory, r, (uint8_t*) r - memory, *offset, *((uint16_t*) r));
             IP += 2;
             break;
         case ARG_MODRM_16:
             r = decode_modrm_16(memory[INSTRUCTION_ADDRESS+1]);
-            printf("ModRM (16): %p %p %lX 0x%02X (AX at %p)\n", memory, r, (uint8_t*) r - memory, *((uint8_t*) r), &AX);
+            syslog(LOG_DEBUG,"ModRM (16): %p %p %lX 0x%02X\n", memory, r, (uint8_t*) r - memory, *((uint8_t*) r));
             IP += 1;
             break;      
         case ARG_INVALID:
         default:
-            printf("Invalid argument type!\n");
+            syslog(LOG_DEBUG,"Invalid argument type!\n");
             return NULL;
     }
     return r;
@@ -308,13 +312,13 @@ void cpu_init()
     cpu_instructions[0xA5].type = FCN_NOARG;
     cpu_instructions[0xA5].fcn.noarg = &op_movsw;
     // B0 mov AL, imm8
-    cpu_instructions[0xB0].type = FCN_BYTEBYTE;
-    cpu_instructions[0xB0].fcn.bytebyte = &op_movbb;
+    cpu_instructions[0xB0].type = FCN_BYTEBYTE_OBSOLETE;
+    cpu_instructions[0xB0].fcn.bytebyte_obsolete = &op_movbb;
     cpu_instructions[0xB0].op1 = ARG_AL;
     cpu_instructions[0xB0].op2 = ARG_MEMORY_8;
     // B4 mov AH, imm8
-    cpu_instructions[0xB4].type = FCN_BYTEBYTE;
-    cpu_instructions[0xB4].fcn.bytebyte = &op_movbb;
+    cpu_instructions[0xB4].type = FCN_BYTEBYTE_OBSOLETE;
+    cpu_instructions[0xB4].fcn.bytebyte_obsolete = &op_movbb;
     cpu_instructions[0xB4].op1 = ARG_AH;
     cpu_instructions[0xB4].op2 = ARG_MEMORY_8;
     // AC lodsb none
@@ -340,17 +344,12 @@ void cpu_init()
     cpu_instructions[0x50].type = FCN_WORD;
     cpu_instructions[0x50].fcn.word = &op_pushw;
     cpu_instructions[0x50].op1 = ARG_AX;
-    // 24 and AL,imm8
-    cpu_instructions[0x24].type = FCN_BYTEBYTE;
-    cpu_instructions[0x24].fcn.bytebyte = &op_andbb;
-    cpu_instructions[0x24].op1 = ARG_AL;
-    cpu_instructions[0x24].op2 = ARG_MEMORY_8;
     // 27 daa none
     cpu_instructions[0x27].type = FCN_NOARG;
     cpu_instructions[0x27].fcn.noarg = &op_daa;
     // 14 adc AL,imm8
-    cpu_instructions[0x14].type = FCN_BYTEBYTE;
-    cpu_instructions[0x14].fcn.bytebyte = &op_adcbb;
+    cpu_instructions[0x14].type = FCN_BYTEBYTE_OBSOLETE;
+    cpu_instructions[0x14].fcn.bytebyte_obsolete = &op_adcbb;
     cpu_instructions[0x14].op1 = ARG_AL;
     cpu_instructions[0x14].op2 = ARG_MEMORY_8;
     // 4B dec BX
@@ -390,14 +389,22 @@ void cpu_init()
     // C3 ret (near) none
     cpu_instructions[0xC3].type = FCN_NOARG;
     cpu_instructions[0xC3].fcn.noarg = &op_ret;
+    // 24 and AL,imm8
+    cpu_instructions[0x24].type = FCN_BYTEBYTE;
+    cpu_instructions[0x24].fcn.bytebyte = &opvar_logicbb;
+    strcpy(cpu_instructions[0x24].variant, "and");
+    cpu_instructions[0x24].op1 = ARG_AL;
+    cpu_instructions[0x24].op2 = ARG_MEMORY_8;
     // 30 xor mem8,reg8
     cpu_instructions[0x30].type = FCN_MODRM_BYTEBYTE;
-    cpu_instructions[0x30].fcn.bytebyte = &op_xorbb;
+    cpu_instructions[0x30].fcn.bytebyte = &opvar_logicbb;
+    strcpy(cpu_instructions[0x30].variant, "xor");
     cpu_instructions[0x30].op1 = ARG_MODRM_RM_R8;
     cpu_instructions[0x30].op2 = ARG_MODRM_REG_R8;
-    // 08 xo mem8,reg8
+    // 08 or mem8,reg8
     cpu_instructions[0x08].type = FCN_MODRM_BYTEBYTE;
-    cpu_instructions[0x08].fcn.bytebyte = &op_orbb;
+    cpu_instructions[0x08].fcn.bytebyte = &opvar_logicbb;
+    strcpy(cpu_instructions[0x08].variant, "or");
     cpu_instructions[0x08].op1 = ARG_MODRM_RM_R8;
     cpu_instructions[0x08].op2 = ARG_MODRM_REG_R8;
     // EB jmp rel8
@@ -418,6 +425,7 @@ void load_program(char *fn, uint16_t offset)
     FILE *fp;
     uint32_t length;
     printf("Loading program from %s\n", fn);
+    syslog(LOG_INFO,"Loading program from %s\n", fn);
     fp = fopen(fn, "rb");
     if (fp) {
         fseek(fp, 0, SEEK_END);
@@ -425,10 +433,12 @@ void load_program(char *fn, uint16_t offset)
         fseek(fp, 0, SEEK_SET);
         if (fread (memory+offset, 1, length, fp) != length) {
             printf("Error reading!\n");
+            syslog(LOG_ERR, "Error reading %s!\n", fn);
         }
         fclose (fp);
     } else {
         printf("Cannot open file!\n");
+        syslog(LOG_ERR, "Cannot open file %s!\n", fn);
     }
 }
 
@@ -442,7 +452,7 @@ void cpu_run()
     bool running = true;
     while(running) {
         opcode = memory[INSTRUCTION_ADDRESS];
-        printf("#%ld address: 0x%04X, opcode: 0x%02X\n", ticks, INSTRUCTION_ADDRESS, opcode);
+        syslog(LOG_DEBUG,"#%ld address: 0x%04X, opcode: 0x%02X\n", ticks, INSTRUCTION_ADDRESS, opcode);
         if (cpu_instructions[opcode].type != FCN_INVALID) {
             switch(cpu_instructions[opcode].type) {
                 case FCN_NOARG:
@@ -459,7 +469,12 @@ void cpu_run()
                 case FCN_BYTEBYTE:
                     op1_8 = (uint8_t*) get_argument_address(cpu_instructions[opcode].op1);
                     op2_8 = (uint8_t*) get_argument_address(cpu_instructions[opcode].op2);
-                    (*cpu_instructions[opcode].fcn.bytebyte)(op1_8, op2_8);
+                    (*cpu_instructions[opcode].fcn.bytebyte)(op1_8, op2_8, cpu_instructions[opcode].variant);
+                    break;
+                case FCN_BYTEBYTE_OBSOLETE:
+                    op1_8 = (uint8_t*) get_argument_address(cpu_instructions[opcode].op1);
+                    op2_8 = (uint8_t*) get_argument_address(cpu_instructions[opcode].op2);
+                    (*cpu_instructions[opcode].fcn.bytebyte_obsolete)(op1_8, op2_8);
                     break;
                 case FCN_WORD:
                     op1_16 = (uint16_t*) get_argument_address(cpu_instructions[opcode].op1);
@@ -479,7 +494,7 @@ void cpu_run()
                     tmp_modrm.byte = next_byte();
                     op1_8 = (uint8_t*) get_modrm_address(cpu_instructions[opcode].op1, tmp_modrm);
                     op2_8 = (uint8_t*) get_modrm_address(cpu_instructions[opcode].op2, tmp_modrm);
-                    (*cpu_instructions[opcode].fcn.bytebyte)(op1_8, op2_8);
+                    (*cpu_instructions[opcode].fcn.bytebyte)(op1_8, op2_8, cpu_instructions[opcode].variant);
                     break;    
                 case FCN_MODRM_WORDWORD:
                     tmp_modrm.byte = next_byte();
@@ -488,11 +503,11 @@ void cpu_run()
                     (*cpu_instructions[opcode].fcn.wordword)(op1_16, op2_16);
                     break;
                 default:
-                    printf("Unknown function type %d\n", cpu_instructions[opcode].type);
+                    syslog(LOG_DEBUG,"Unknown function type %d\n", cpu_instructions[opcode].type);
             }
         } else {
-            printf("Not implemented instruction 0x%02X\n", opcode);
-            exit(1);
+            syslog(LOG_DEBUG,"Not implemented instruction 0x%02X\n", opcode);
+            clean_up_and_exit(1);
         }
         print_info();
         // Step in
@@ -505,7 +520,7 @@ void cpu_run()
 /* Instructions */
 void op_addb(uint8_t *b1)
 {
-    printf("op_addb %p (AL at %p = 0x%02X), 0x%02X + 0x%02X\n", b1, &AL, AL, *b1, memory[INSTRUCTION_ADDRESS+1]);
+    syslog(LOG_DEBUG,"op_addb %p (AL at %p = 0x%02X), 0x%02X + 0x%02X\n", b1, &AL, AL, *b1, memory[INSTRUCTION_ADDRESS+1]);
     IP += 1;
     
     // if(*b1 == 0) FLAGS.ZF = 1; else FLAGS.ZF = 0;
@@ -530,7 +545,7 @@ void op_addb(uint8_t *b1)
 void op_pushf(void)
 {
     // Not used
-    printf("op_pushf, stack address: 0x%04X\n", STACK_ADDRESS);
+    syslog(LOG_DEBUG,"op_pushf, stack address: 0x%04X\n", STACK_ADDRESS);
     SP -= 2;
     memory[STACK_ADDRESS+2] = FLAGS.H;
     memory[STACK_ADDRESS+1] = FLAGS.L;
@@ -539,7 +554,7 @@ void op_pushf(void)
 
 void op_pusha(void)
 {
-    printf("op_pusha, stack address: 0x%04X\n", STACK_ADDRESS);
+    syslog(LOG_DEBUG,"op_pusha, stack address: 0x%04X\n", STACK_ADDRESS);
     Register orig_SP = SP;
     
     op_pushw(&AX);
@@ -575,7 +590,7 @@ void op_pusha(void)
 void op_push_cs(void)
 {
     // Not used
-    printf("op_push CS, stack address: 0x%04X\n", STACK_ADDRESS);
+    syslog(LOG_DEBUG,"op_push CS, stack address: 0x%04X\n", STACK_ADDRESS);
     SP -= 2;
     memcpy(memory+STACK_ADDRESS+1, &CS, 2);
     //printf("0x%04X, 0x%02X 0x%02X\n", CS, memory[STACK_ADDRESS+1], memory[STACK_ADDRESS+2]);
@@ -584,25 +599,22 @@ void op_push_cs(void)
 
 void op_movww(uint16_t *w1, uint16_t *w2)
 {
-    printf("op_movww %p %p; %p %X\n", w1, &DI, w2, *w2);
+    syslog(LOG_DEBUG,"op_movww %p 0x%04X <-- %p; 0x%04X\n", w1, *w1, w2, *w2);
     *w1 = *w2;
-    // printf("DI (0x%04X)\n",DI);
-    // printf("SI (0x%04X)\n",SI);
 }
 
 void op_movsw(void)
 {
     // A5 movsw none
     // Move word at address DS:(E)SI to address ES:(E)DI
-    printf("op_movsw %02X %02X <-- %02X %02X\n", memory[16*ES+DI], memory[16*ES+DI+1], memory[16*DS+SI], memory[16*DS+SI+1]);
-    // printf("DI (%04X) --> SI (0x%04X)\n", DI, SI);
+    syslog(LOG_DEBUG,"op_movsw %02X %02X <-- %02X %02X\n", memory[16*ES+DI], memory[16*ES+DI+1], memory[16*DS+SI], memory[16*DS+SI+1]);
     memory[16*ES+DI] = memory[16*DS+SI];
     memory[16*ES+DI+1] = memory[16*DS+SI+1];
 }
 
 void op_movbb(uint8_t *b1, uint8_t *b2)
 {
-    printf("op_movbb %p %p; %p %X <-- %X\n", b1, &AL, b1, *b1, *b2);
+    syslog(LOG_DEBUG,"op_movbb %p 0x%02X <-- %p 0x%02X\n", b1, *b1, b2, *b2);
     *b1 = *b2;
 }
 
@@ -610,7 +622,7 @@ void op_lodsb(void)
 {
     // AC lodsb none
     // Load byte at address DS:(E)SI into AL.
-    printf("op_lodsb %02X (16*DS+SI) <-- %02X '%c' (AL)\n", memory[16*DS+SI], AL, AL);
+    syslog(LOG_DEBUG,"op_lodsb %02X (16*DS+SI) <-- %02X '%c' (AL)\n", memory[16*DS+SI], AL, AL);
     AL = memory[16*DS+SI];
     if(FLAGS.DF == 0) SI += 1;
 	else SI -= 1;
@@ -620,7 +632,7 @@ void op_stosb(void)
 {
     // AA stosb none
     // Store AL at address ES:(E)DI.
-    printf("op_stosb %02X (16*ES+DI) <-- %02X '%c' (AL)\n", memory[16*ES+DI], AL, AL);
+    syslog(LOG_DEBUG,"op_stosb %02X (16*ES+DI) <-- %02X '%c' (AL)\n", memory[16*ES+DI], AL, AL);
     memory[16*ES+DI] = AL;
     DI += 1;
 }
@@ -629,7 +641,7 @@ void op_stosw(void)
 {
     // AB stosw none
     // Store AX at address ES:(E)DI.
-    printf("op_stosw %02X (16*ES+DI) <-- %02X (AX)\n", memory[16*ES+DI], AX);
+    syslog(LOG_DEBUG,"op_stosw %02X (16*ES+DI) <-- %02X (AX)\n", memory[16*ES+DI], AX);
     memcpy(memory+16*ES+DI, &AX, 2);
     DI += 2;
 }
@@ -637,8 +649,8 @@ void op_stosw(void)
 
 void op_pushw(uint16_t *w1)
 {
-    printf("op_pushw %p, stack address: 0x%04X\n", w1, STACK_ADDRESS);
-    printf("Pushing %04X (%p)\n", *w1, w1);
+    syslog(LOG_DEBUG,"op_pushw %p, stack address: 0x%04X\n", w1, STACK_ADDRESS);
+    syslog(LOG_DEBUG,"Pushing %04X (%p)\n", *w1, w1);
     SP -= 2;
     memcpy(memory+STACK_ADDRESS, w1,  2);
     //printf("0x%04X (AX=0x%04X), 0x%02X 0x%02X\n", *w1, AX, memory[STACK_ADDRESS+1], memory[STACK_ADDRESS+2]);
@@ -647,17 +659,17 @@ void op_pushw(uint16_t *w1)
 
 void op_popw(uint16_t *w1)
 {
-    printf("op_popw %p, stack address: 0x%04X\n", w1, STACK_ADDRESS);
+    syslog(LOG_DEBUG,"op_popw %p, stack address: 0x%04X\n", w1, STACK_ADDRESS);
     memcpy(w1, memory+STACK_ADDRESS, 2);
     SP += 2;
-    //printf("0x%04X (AX=0x%04X), 0x%02X 0x%02X\n", *w1, AX, memory[STACK_ADDRESS-1], memory[STACK_ADDRESS-2]);
-    printf("Poping: 0x%04X\n", *w1);
+    //syslog(LOG_DEBUG,"0x%04X (AX=0x%04X), 0x%02X 0x%02X\n", *w1, AX, memory[STACK_ADDRESS-1], memory[STACK_ADDRESS-2]);
+    syslog(LOG_DEBUG,"Poping: 0x%04X\n", *w1);
     //print_stack();
 }
 
 void op_rolwb(uint16_t *w1, uint8_t *b2)
 {
-    printf("op_rolwb %p (AX at %p); %X << %X\n", w1, &AX, *w1, *b2);
+    syslog(LOG_DEBUG,"op_rolwb %p; %X << %X\n", w1, *w1, *b2);
     //*w1 = *w1 << *b2;
     for (uint8_t i = 0; i < *b2; i++) {
         if (*w1 & 0x8000) FLAGS.CF = 1;
@@ -671,16 +683,7 @@ void op_rolwb(uint16_t *w1, uint8_t *b2)
     } else {
         FLAGS.OF = 0;
     }
-    printf("Result at %p = 0x%04X\n", w1, *w1);
-}
-
-void op_andbb(uint8_t *b1, uint8_t *b2)
-{
-    printf("op_andbb %p %p; (AL at %p) 0x%02X & 0x%02X\n", b1, b2, &AL, *b1, *b2);
-    *b1 = *b1 & *b2;
-    FLAGS.CF = 0;
-    FLAGS.OF = 0;
-    setflag_zsp8(*b1);
+    syslog(LOG_DEBUG,"Result at %p = 0x%04X\n", w1, *w1);
 }
 
 uint8_t carryflag8(uint8_t b1, uint8_t b2)
@@ -694,7 +697,7 @@ uint8_t carryflag8(uint8_t b1, uint8_t b2)
 
 void op_daa(void)
 {
-    printf("op_daa\n");
+    syslog(LOG_DEBUG,"op_daa\n");
     uint8_t old_AL = AL;
     uint8_t old_CF = FLAGS.CF;
     FLAGS.CF = 0;
@@ -715,7 +718,7 @@ void op_daa(void)
 
 void op_adcbb(uint8_t *b1, uint8_t *b2)
 {
-    printf("op_adcbb %p %p; (AL at %p) 0x%02X + 0x%02X + %d\n", b1, b2, &AL, *b1, *b2, FLAGS.CF);
+    syslog(LOG_DEBUG,"op_adcbb %p %p; (AL at %p) 0x%02X + 0x%02X + %d\n", b1, b2, &AL, *b1, *b2, FLAGS.CF);
     uint16_t r16;
     r16 = (uint16_t)*b1 + (uint16_t)*b2 + (uint16_t)FLAGS.CF;
     *b1 = *b1 + *b2 + FLAGS.CF;
@@ -754,7 +757,7 @@ void setflag_zsp8(uint8_t b)
 
 void op_decw(uint16_t *w1)
 {
-    printf("op_decw %p 0x%04X\n", w1, *w1);
+    syslog(LOG_DEBUG,"op_decw %p 0x%04X\n", w1, *w1);
     uint16_t r32;
     uint16_t d = 0x01;
     r32 = (uint32_t)*w1 - (uint32_t)d;
@@ -793,30 +796,30 @@ void setflag_zsp16(uint16_t w)
 	FLAGS.PF = parity16(w); 
 }
 
-void opvar_jump(uint8_t *b1, char *variant)
+DEFINE_VARIANT_FCN(opvar_jump, uint8_t *b1)
 {
     bool b_jumped = false;
     int16_t sb1 = (int16_t)((int8_t)*b1);
-    printf("opvar_jump (%s) %p 0x%02X %d\n", variant, b1, *b1, sb1);
+    syslog(LOG_DEBUG,"opvar_jump (%s) %p 0x%02X %d\n", variant, b1, *b1, sb1);
     if (strcmp(variant, "jmp") == 0) {
         // EB jmp rel8
         IP = IP + sb1;
         b_jumped = true;
     } else {
-        printf("Unknown variant: %s", variant);
-        exit(1);
+        syslog(LOG_DEBUG,"Unknown variant: %s", variant);
+        clean_up_and_exit(1);
     }
-    if (b_jumped) printf("Jumped to 0x%04X\n", IP);
+    if (b_jumped) syslog(LOG_DEBUG,"Jumped to 0x%04X\n", IP);
 }
 
 void op_jz(uint8_t *b1)
 {
     /* JNE and JNZ are just different names for a conditional jump when ZF is equal to 0. */
     int16_t sb1 = (int16_t)((int8_t)*b1);
-    printf("op_jz %p 0x%02X %d\n", b1, *b1, sb1);
+    syslog(LOG_DEBUG,"op_jz %p 0x%02X %d\n", b1, *b1, sb1);
     if(FLAGS.ZF == 1) {
         IP = IP + sb1;
-        printf("Jumped to 0x%04X\n", IP);
+        syslog(LOG_DEBUG,"Jumped to 0x%04X\n", IP);
     }
 }
 
@@ -824,28 +827,28 @@ void op_jnz(uint8_t *b1)
 {
     /* JNE and JNZ are just different names for a conditional jump when ZF is equal to 0. */
     int16_t sb1 = (int16_t)((int8_t)*b1);
-    printf("op_jnz %p 0x%02X %d\n", b1, *b1, sb1);
+    syslog(LOG_DEBUG,"op_jnz %p 0x%02X %d\n", b1, *b1, sb1);
     if(FLAGS.ZF == 0) {
         IP = IP + sb1;
-        printf("Jumped to 0x%04X\n", IP);
+        syslog(LOG_DEBUG,"Jumped to 0x%04X\n", IP);
     }
 }
 
 void op_loop(uint8_t *b1)
 {
     int16_t sb1 = (int16_t)((int8_t)*b1);
-    printf("op_loop %p 0x%02X %d, CX=%d\n", b1, *b1, sb1, CX);
+    syslog(LOG_DEBUG,"op_loop %p 0x%02X %d, CX=%d\n", b1, *b1, sb1, CX);
     CX = CX - 1;
     if(CX) {
         IP = IP + sb1;
-        printf("Jumped to 0x%04X\n", IP);
+        syslog(LOG_DEBUG,"Jumped to 0x%04X\n", IP);
     }
 }
 
 void op_int(uint8_t *b1)
 {
     uint16_t i = 0;
-    printf("op_int %p 0x%02X\n", b1, *b1);
+    syslog(LOG_DEBUG,"op_int %p 0x%02X\n", b1, *b1);
     // mov ah, function number
     //    ; input parameters
     //    int 21h
@@ -853,42 +856,44 @@ void op_int(uint8_t *b1)
     // https://www.philadelphia.edu.jo/academics/qhamarsheh/uploads/Lecture%2021%20MS-DOS%20Function%20Calls%20_INT%2021h_.pdf
     // http://bbc.nvg.org/doc/Master%20512%20Technical%20Guide/m512techb_int21.htm
     if (*b1 == 0x21) {
-        printf("Interrupt 0x%02X: MS-DOS Function Call %02X\n", *b1, AH);
+        syslog(LOG_DEBUG,"Interrupt 0x%02X: MS-DOS Function Call %02X\n", *b1, AH);
         switch(AH) {
             case 0x09:
                 // 09h - Write string (terminated by a $ character)to standard output.
                 // DS:DX = segment:offset of string
                 i = 0;
-                printf("PRINTING (0x%04X %c):\n", 16*DS + 0*DX, memory[16*DS+DX+i]);
+                syslog(LOG_DEBUG,"PRINTING (0x%04X %c):\n", 16*DS + 0*DX, memory[16*DS+DX+i]);
                 // $ = 0x24 = 36
                 while (memory[16*DS+DX+i] != '$') {
                     printf("%c", memory[16*DS+DX+i]);
+                    syslog(LOG_INFO,"%c", memory[16*DS+DX+i]);
                     i++;
                 }
-                printf("\n");
+                //printf("\n");
                 break;
             case 0x4C:
-                printf("EXITING 0x%02X!\n", AL);
-                exit(AL);
+                syslog(LOG_DEBUG,"EXITING 0x%02X!\n", AL);
+                clean_up_and_exit(AL);
                 break;
             default:
-                printf("Not implemented interrupt routine AH = 0x%02X\n", AH);
-                exit(1);   
+                syslog(LOG_DEBUG,"Not implemented interrupt routine AH = 0x%02X\n", AH);
+                clean_up_and_exit(1);   
         }
     } else if (*b1 == 0x10) {
-        printf("Interrupt 0x%02X: MS-DOS Function Call %02X\n", *b1, AH);
+        syslog(LOG_DEBUG,"Interrupt 0x%02X: MS-DOS Function Call %02X\n", *b1, AH);
         switch(AH) {
             case 0x0E:
-                printf("PRINTING: %c\n", AL);
+                printf("%c", AL);
+                syslog(LOG_DEBUG,"PRINTING: %c\n", AL);
                 break;
             default:
-                printf("Not implemented interrupt routine AH = 0x%02X\n", AH);
-                exit(1);
+                syslog(LOG_DEBUG,"Not implemented interrupt routine AH = 0x%02X\n", AH);
+                clean_up_and_exit(1);
         }
 
     } else {
-        printf("Not implemented interrupt call 0x%02X\n", *b1);
-        exit(1);
+        syslog(LOG_DEBUG,"Not implemented interrupt call 0x%02X\n", *b1);
+        clean_up_and_exit(1);
     }
     
 }	
@@ -896,28 +901,56 @@ void op_int(uint8_t *b1)
 void op_call(uint16_t *w1)
 {
     int16_t sw1 = (int16_t)(*w1);
-    printf("op_call %p 0x%04X %d\n", w1, *w1, sw1);
+    syslog(LOG_DEBUG,"op_call %p 0x%04X %d\n", w1, *w1, sw1);
     op_pushw(&IP);
     IP = IP + sw1;
-    printf("Jumped to 0x%04X\n", IP);
+    syslog(LOG_DEBUG,"Jumped to 0x%04X\n", IP);
 }
 
 void op_ret(void)
 {
     uint16_t sw1;
     op_popw(&sw1);
-    printf("op_ret 0x%04X\n", sw1);
+    syslog(LOG_DEBUG,"op_ret 0x%04X\n", sw1);
     if (sw1 == 0x0000) {
-        printf("Seems like nothing is on stack (0x%04X)! Nowhere to return = exit program!\n", sw1);
-        exit(0);
+        syslog(LOG_DEBUG,"Seems like nothing is on stack (0x%04X)! Nowhere to return = exit program!\n", sw1);
+        clean_up_and_exit(0);
     }
     IP = sw1;
-    printf("Returned to 0x%04X\n", IP);
+    syslog(LOG_DEBUG,"Returned to 0x%04X\n", IP);
+}
+
+/* Logic instructions*/
+DEFINE_VARIANT_FCN(opvar_logicbb, uint8_t *b1, uint8_t *b2)
+{
+    syslog(LOG_DEBUG,"opvar_logicbb (%s) %p %p 0x%02X 0x%02X\n", variant, b1, b2, *b1, *b2);    
+    if (CHECK_VARIANT("and")) {
+        *b1 = *b1 & *b2;
+    } else if (CHECK_VARIANT("or")) {
+        *b1 = *b1 | *b2;
+    } else if (CHECK_VARIANT("xor")) {
+        *b1 = *b1 ^ *b2;
+    } else {
+        syslog(LOG_DEBUG,"Unknown variant: %s", variant);
+        clean_up_and_exit(1);
+    }
+    FLAGS.CF = 0;
+    FLAGS.OF = 0;
+    setflag_zsp8(*b1);
+}
+
+void op_andbb(uint8_t *b1, uint8_t *b2)
+{
+    syslog(LOG_DEBUG,"op_andbb %p %p; (AL at %p) 0x%02X & 0x%02X\n", b1, b2, &AL, *b1, *b2);
+    *b1 = *b1 & *b2;
+    FLAGS.CF = 0;
+    FLAGS.OF = 0;
+    setflag_zsp8(*b1);
 }
 
 void op_xorbb(uint8_t *b1, uint8_t *b2)
 {
-    printf("op_xorbb %p %p; (BH at %p) 0x%02X & 0x%02X\n", b1, b2, &BH, *b1, *b2);
+    syslog(LOG_DEBUG,"op_xorbb %p %p; (BH at %p) 0x%02X & 0x%02X\n", b1, b2, &BH, *b1, *b2);
     *b1 = *b1 ^ *b2;
     FLAGS.CF = 0;
     FLAGS.OF = 0;
@@ -926,7 +959,7 @@ void op_xorbb(uint8_t *b1, uint8_t *b2)
 
 void op_orbb(uint8_t *b1, uint8_t *b2)
 {
-    printf("op_orbb %p %p; 0x%02X & 0x%02X\n", b1, b2, *b1, *b2);
+    syslog(LOG_DEBUG,"op_orbb %p %p; 0x%02X & 0x%02X\n", b1, b2, *b1, *b2);
     *b1 = *b1 | *b2;
     FLAGS.CF = 0;
     FLAGS.OF = 0;
@@ -936,46 +969,68 @@ void op_orbb(uint8_t *b1, uint8_t *b2)
 /* Printing */
 void print_stack(void)
 {
-    uint16_t i = stack_start - 1;
+    const uint16_t buffer_size = 64;
+    char buffer[buffer_size];
+    uint16_t i = stack_start - 1, j = 0, written;
+    strcpy(buffer, "");
     while (i >= STACK_ADDRESS) {
-        if ((stack_start -1 - i) > 0 && (stack_start -1 - i) % 8 == 0) printf("\n");
-        printf("%02X ", memory[i]);
+        if ((stack_start -1 - i) > 0 && (stack_start -1 - i) % 8 == 0) {
+            //syslog(LOG_DEBUG,"\n");
+            syslog(LOG_DEBUG, "%s", buffer);
+            j = 0;
+        }
+        //syslog(LOG_DEBUG,"%02X ", memory[i]);
+        written = sprintf(buffer+j, "%02X ", memory[i]);
         i--;
-    }
-    printf("\n");
+        j += written; 
+    } 
+    syslog(LOG_DEBUG, "%s", buffer);
 }
 
 void print_registry(void)
 {
-    printf("AX %04X  BX %04X  CX %04X  DX %04x\n", AX, BX, CX, DX);
-    printf("SP %04X  BP %04X  SI %04X  DI %04X\n", SP, BP, SI, DI);
-    printf("ES %04X  CS %04X  SS %04X  DS %04X\n", ES, CS, SS, DS);
-    printf("FLAGS %04X (CF=%d,OF=%d,AF=%d,ZF=%d,SF=%d)\n", FLAGS.X, FLAGS.CF, FLAGS.OF, FLAGS.AF, FLAGS.ZF, FLAGS.SF);
-    printf("INSTRUCTION AT: %04X\n", INSTRUCTION_ADDRESS);
-    printf("STACK AT:       %04X (%04X)\n", STACK_ADDRESS, stack_start);
+    syslog(LOG_DEBUG,"AX %04X  BX %04X  CX %04X  DX %04x\n", AX, BX, CX, DX);
+    syslog(LOG_DEBUG,"SP %04X  BP %04X  SI %04X  DI %04X\n", SP, BP, SI, DI);
+    syslog(LOG_DEBUG,"ES %04X  CS %04X  SS %04X  DS %04X\n", ES, CS, SS, DS);
+    syslog(LOG_DEBUG,"FLAGS %04X (CF=%d,OF=%d,AF=%d,ZF=%d,SF=%d)\n", FLAGS.X, FLAGS.CF, FLAGS.OF, FLAGS.AF, FLAGS.ZF, FLAGS.SF);
+    syslog(LOG_DEBUG,"INSTRUCTION AT: %04X\n", INSTRUCTION_ADDRESS);
+    syslog(LOG_DEBUG,"STACK AT:       %04X (%04X)\n", STACK_ADDRESS, stack_start);
 }
 
 void print_info(void)
 {
-    printf("--- REGISTRY & STACK ---\n");
+    syslog(LOG_DEBUG,"--- REGISTRY & STACK ---\n");
     print_registry();
     print_stack();
-    printf("------------------------\n");
+    syslog(LOG_DEBUG,"------------------------\n");
+}
+
+void clean_up_and_exit(int status)
+{
+    printf("Exit(%d)\n", status);
+    closelog();
+    exit(status);
 }
 
 int main(int argc, char **argv)
 {
+    // Logging
+    openlog("cpu8086", LOG_CONS, LOG_LOCAL0);
+    // Self-Test
     GeneralPurposeRegister T;
     T.X = 0x1234;
-    printf("Test of general purpose register\n");
-    printf("X=0x%04X H=0x%02X L=0x%02X\n", T.X, T.H, T.L);
+    syslog(LOG_DEBUG,"Test of general purpose register\n");
+    syslog(LOG_DEBUG,"X=0x%04X H=0x%02X L=0x%02X\n", T.X, T.H, T.L);
 
-    //
+    // Main
     cpu_init();
     // load_program("yourhelp.com", 0x1FD0);
     load_program("helloworld.com", 0x1FD0);
     // 0x100+16*0x01ED = 0x100 + 0x1ED0
 
     // memory[0x1FD1] = 0x04;
+    printf("Running\n");
     cpu_run();
+    printf("Done");
+    closelog();
 }

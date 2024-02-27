@@ -72,12 +72,15 @@ enum ArgType {
 /* All the other registers */
 typedef uint16_t Register;
 
-/* Instructions table */
+/* Instructions */
+#define DECLARE_VARIANT_FCN(name, ...) void (*name)(__VA_ARGS__, char *variant)
+#define DEFINE_VARIANT_FCN(name, ...) void name(__VA_ARGS__, char *variant)
 typedef union {
   void (*noarg)(void);
   void (*byte)(uint8_t *op1);
-  void (*byte_variant)(uint8_t *op1, char *variant);
-  void (*bytebyte)(uint8_t *op1, uint8_t *op2);
+  DECLARE_VARIANT_FCN(byte_variant, uint8_t *op1);
+  DECLARE_VARIANT_FCN(bytebyte, uint8_t *op1, uint8_t *op2);
+  void (*bytebyte_obsolete)(uint8_t *op1, uint8_t *op2);
   void (*word)(uint16_t *op1);
   void (*wordword)(uint16_t *op1, uint16_t *op2);
   void (*wordbyte)(uint16_t *op1, uint8_t *op2);
@@ -86,7 +89,7 @@ typedef union {
 enum FcnType {
     FCN_INVALID, FCN_NOARG, 
     FCN_BYTE, FCN_BYTE_VARIANT, FCN_WORD, FCN_WORD_VARIANT,
-    FCN_BYTEBYTE, FCN_WORDWORD, FCN_WORDBYTE, 
+    FCN_BYTEBYTE, FCN_BYTEBYTE_OBSOLETE, FCN_WORDWORD, FCN_WORDBYTE, 
     FCN_MODRM_BYTEBYTE, FCN_MODRM_WORDWORD
 };
 
@@ -98,6 +101,7 @@ typedef struct {
     enum ArgType op2;
 } CpuInstruction;
 
+#define CHECK_VARIANT(x) strcmp(variant, x) == 0 
 
 /* ModR/M byte*/
 typedef union {
