@@ -84,13 +84,15 @@ typedef union {
   void (*word)(uint16_t *op1);
   void (*wordword)(uint16_t *op1, uint16_t *op2);
   void (*wordbyte)(uint16_t *op1, uint8_t *op2);
+  void (*generic)(uint16_t opcode, void **args);
 } fcn_instruction;
 
 enum FcnType {
     FCN_INVALID, FCN_NOARG, 
     FCN_BYTE, FCN_BYTE_VARIANT, FCN_WORD, FCN_WORD_VARIANT,
     FCN_BYTEBYTE, FCN_BYTEBYTE_OBSOLETE, FCN_WORDWORD, FCN_WORDBYTE, 
-    FCN_MODRM_BYTEBYTE, FCN_MODRM_WORDWORD
+    FCN_MODRM_BYTEBYTE, FCN_MODRM_WORDWORD,
+    FCN_GENERIC
 };
 
 typedef struct {
