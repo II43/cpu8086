@@ -1,7 +1,6 @@
 # Executables
 cpu8086
-helloworld.com
-yourhelp.com
+*.com
 
 # Prerequisites
 *.d

@@ -123,4 +123,34 @@ typedef union {
 #define INSTRUCTION_ADDRESS (16 * CS + IP)
 #define STACK_ADDRESS (16 * SS + SP)
 
+#define MEMORY_SIZE 0x80000
+
+/* Functions */
+void cpu_init();
+void cpu_run();
+
+void load_program(char *fn, uint16_t offset);
+void clean_up_and_exit(int status);
+
+void print_stack(void);
+void print_registry(void);
+void print_info(void);
+
+/* Extern variables */
+extern StatusRegister FLAGS;
+extern GeneralPurposeRegister A;
+extern GeneralPurposeRegister B;
+extern GeneralPurposeRegister C;
+extern GeneralPurposeRegister D;
+extern Register CS;
+extern Register DS;
+extern Register SS;
+extern Register ES;
+extern Register IP;
+extern Register BP;
+extern Register SP;
+extern Register SI;
+extern Register DI;
+extern uint8_t memory[MEMORY_SIZE];
+
 # endif
