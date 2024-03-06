@@ -3,25 +3,41 @@ LINKER = gcc
 
 CFLAGS = -std=c99 -Wall
 
-LDFLAGS = 
+LDFLAGS = -lpthread $(shell pkg-config --libs sdl2)
 LDLIBS =  
-OBJS = 
-			
-cpu8086: cpu8086.c cpu8086.h cpu8086_instructions.c cpu8086_instructions.h $(OBJS)
-	$(CC) $(CFLAGS) $(OBJS) -c main.c  
-	$(CC) $(CFLAGS) $(OBJS) -c cpu8086.c
-	$(CC) $(CFLAGS) $(OBJS) -c cpu8086_instructions.c
-	$(CC) $(CFLAGS) $(OBJS) -c bios.c
-	$(LINKER) -o cpu8086 main.o cpu8086.o cpu8086_instructions.o bios.o $(LDFLAGS) $(LDLIBS)
 
-helloworld: helloworld.asm
-	nasm -fbin -o helloworld.com helloworld.asm
+BUILDDIR= ./build
 
-yourhelp: yourhelp.asm
-	nasm -fbin -o yourhelp.com yourhelp.asm
+SRCDIR = ./
+SRCS = \
+	$(SRCDIR)/main.c \
+	$(SRCDIR)/cpu8086.c \
+	$(SRCDIR)/cpu8086_instructions.c \
+	$(SRCDIR)/bios.c \
+	$(SRCDIR)/sdl2_video.c
 
-palette_vga: palette_vga.asm
-	nasm -fbin -o palette_vga.com palette_vga.asm
+OBJDIR = $(BUILDDIR)/obj
+OBJS = $(patsubst $(SRCDIR)/%.c,$(OBJDIR)/%.o,$(SRCS))
+
+EXAMPLES = \
+	helloworld.com \
+	yourhelp.com \
+	palette_vga.com
+
+cpu8086: $(OBJS)
+	$(LINKER) -o $(BUILDDIR)/cpu8086 $(OBJS) $(LDFLAGS) $(LDLIBS)
+
+$(OBJDIR)/%.o: %.c
+	$(CC) $(CFLAGS) -c $< -o $@
+
+$(OBJDIR)/sdl2_video.o: SDL2 = $(shell pkg-config --cflags sdl2)
+$(OBJDIR)/sdl2_video.o: sdl2_video.c sdl2_video.h
+	$(CC) $(CFLAGS) $(SDL2) -c sdl2_video.c -o $(OBJDIR)/sdl2_video.o
+
+examples: $(EXAMPLES)
+
+%.com: %.asm
+	nasm -fbin -o $(BUILDDIR)/$@ $<
 
 test:
 	# gcc -S -std=gnu99 -Os -nostdlib -m16 -march=i386 -ffreestanding test.c
@@ -31,6 +47,16 @@ test:
 	# gcc -S -masm=intel -std=gnu99 -Os -nostdlib -m32 -march=i386 -ffreestanding test.c
 	# nasm -fbin -o test.com test.s
 
+.PHONY : directories
+directories:
+	mkdir -p $(BUILDDIR)
+	mkdir -p $(OBJDIR)
+
+.PHONY : clean
 clean:
-	$(RM) *.o
-	$(RM) cpu8086 helloworld.com yourhelp.com palette_vga.com test.com* test.s
+	$(RM) $(OBJDIR)/*.o
+	$(RM) $(BUILDDIR)/*.*
+.PHONY : clean
+
+.PHONY : all
+all: directories cpu8086 examples 
